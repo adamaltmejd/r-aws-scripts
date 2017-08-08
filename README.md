@@ -82,34 +82,51 @@ aws ec2 authorize-security-group-ingress --group-name $SEC_GR_NAME --protocol tc
 aws ec2 authorize-security-group-ingress --group-name $SEC_GR_NAME --protocol tcp --port 8787 --cidr $ips
 aws ec2 authorize-security-group-ingress --group-name $SEC_GR_NAME --protocol tcp --port 3838 --cidr $ips
 ```
-# Executing code on the instance
 
-## S3 for data storage
+## Executing code on the instance
+Having an instance set up we can now run code on it. I use [send-command](http://docs.aws.amazon.com/cli/latest/reference/ssm/send-command.html) with the [runShellScript](http://docs.aws.amazon.com/systems-manager/latest/APIReference/aws-runShellScript.html) document. Using the default document means a maximum timeout limit of 8 hours (28800 seconds), if you need more time you can [create your own document](http://docs.aws.amazon.com/systems-manager/latest/userguide/create-ssm-doc.html).
+
+Included in this repository are files; `send_command` and `send_command_remote`, that include an example of how to execute code on the instance. Before the files can be executed they need to be configured.
+
+### S3 for data storage
 Since we want to shut down the instance as soon as the script is finished we need to store all the data in an [S3 bucket](http://docs.aws.amazon.com/cli/latest/userguide/using-s3-commands.html). To create an S3 bucket write:
 
 ```
 aws s3 mb s3://<bucketname>
 ```
 
-We then need to create a [role](http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html) for our EC2 instance and assign it so that the instance can download and upload files to the S3 bucket. Easiest is to do this through the AWS management console. Create a role with the policies `AmazonS3FullAccess` and `AmazonEC2RoleforSSM`.
+We then need to create a [role](http://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html) for our EC2 instance and assign it so that the instance can download and upload files to the S3 bucket. Easiest is to do this through the AWS management console. Create a role with the policies `AmazonS3FullAccess` and `AmazonEC2RoleforSSM` and assign it to the instance.
 
-# Some other useful commands
+### Email notifications
+[Amazon Simple Notification Service](https://aws.amazon.com/sns/) makes it possible to receive an email when the script is finished. You just need to assign a IAM role to the EC2 instance to allow it to access SNS using the policy `AmazonSNSFullAcces` and then an [SNS topic](http://docs.aws.amazon.com/gettingstarted/latest/deploy/creating-an-sns-topic.html) to which to publish.
 
-Terminating the instance:
+### Executing the script
+When everything is configured you should just be able to run the `send_command` file to run the script remotely.
+
+### Downloading results
+When finished, download the results by syncing the bucket with your local folder
+
 ```sh
-aws ec2 terminate-instances --instance-ids $IID
+aws s3 sync s3://$s3_bucket/$project $project
 ```
 
+### Other useful commands
+To check status of the command we can run
+
 ```sh
-sh_command_id=$(
-aws ssm send-command \
-    --instance-ids $IID \
-    --document-name "AWS-RunShellScript" \
-    --comment "Hej" \
-    --parameters commands=whoami \
-    --output text \
-    --query "Command.CommandId")
+CID=
+aws ssm list-command-invocations --command-id $CID --details
+```
 
+If the R-script uses a log file to track progress, we can log in with ssh to track it:
 
-aws ssm send-command --instance-ids $IID --document-name "AWS-RunShellScript" --comment "Demo run shell script on Linux Instance" --parameters commands=whoami --output text --query "Command.CommandId"
+```sh
+ssh -i $KEYPAIR -t ec2-user@$PDNS "less +F path_to_log_file"
+```
+
+To cancel a running command either go to the AWS console or run
+
+```sh
+CID=
+aws ssm cancel-command --command-id $CID
 ```

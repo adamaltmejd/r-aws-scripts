@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Example script to execute code on AWS
+# Run this script locally
+
+# SETTINGS (required)
+s3_bucket="" # name of S3 bucket
+project="" # name of project (in S3 bucket)
+code_src="code" # source for all code folder
+data_src="data" # source folder with data
+remote_script="setup_instance_remote"
+
+IID="" # EC2 instance ID
+PDNS=$(aws ec2 describe-instances --instance-ids "$IID" | jq -r '.Reservations[0].Instances[0].PublicDnsName') # get public DNS
+KEYPAIR="$HOME/.ssh/ec2_keypair.pem" # Path to EC2 key
+
+# SNS settings
+$service_role_arn="arn:aws:iam::<account-id>:role/<name>"
+$notification_topic_arn="arn:aws:sns:<region>:<account-id>:<name>"
+
+# First sync current folder to S3 bucket
+# Exclude log files and old result files (if they exist)
+aws s3 sync $code_src s3://$s3_bucket/$project/code --exclude ".DS_Store" --exclude "logs/*"
+
+# Remove old data and sync new
+aws s3 rm s3://$s3_bucket/$project/data/ --recursive
+aws s3 sync $data_src s3://$s3_bucket/$project/data --exclude ".DS_Store" --exclude "*.RData"
+
+# Remove old log files
+aws s3 rm s3://$s3_bucket/$project/logs/ --recursive
+
+# Copy the script to be run on the servers
+scp -i "$KEYPAIR" $remote_script "ec2-user@$PDNS:~/$(basename "$remote_script")"
+
+aws ssm send-command \
+    --instance-ids $IID \
+    --comment "Run Rscript" \
+    --document-name "AWS-RunShellScript" \
+    --parameters '{
+        "commands":["./'"$(basename $remote_script)"'", "shutdown -h now"],
+        "executionTimeout":["28800"],
+        "workingDirectory":["/home/ec2-user/"]
+    }' \
+    --timeout-seconds 72000 \
+    --service-role-arn "$service_role_arn" \
+    --output-s3-bucket-name "$s3_bucket" \
+    --output-s3-key-prefix "logs" \
+    --notification-config '{
+        "NotificationArn":'"$notification_topic_arn"',
+        "NotificationEvents":["All"],
+        "NotificationType":"Command"
+    }'

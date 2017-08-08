@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# Example script to run using send-command to start the R code on EC2 instance
+
+# OPTIONS (required)
+s3_bucket="" # name of S3 bucket
+project="" # name of project (in S3 bucket)
+r_script="" # name of R-script to run (file in code folder)
+
+# Sync data from EC2 bucket to folder called $project
+aws s3 sync s3://$s3_bucket/$project $project
+
+# Run code
+Rscript $project/code/$r_script
+
+# Upload results
+aws s3 sync $project s3://$s3_bucket/$project
