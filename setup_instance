@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# This bash script launches a new EC2 instance and configures it to be used
+# with R. Before running, make sure to fill in the options below.
+# Also make sure you have the command line tools "jq" and "dig" available.
+
+################################################################################
+# OPTINONS
+
+# Required
+KEYPAIR_NAME="" # Name of AWS EC2 keypair (created through AWS EC2 console)
+KEYPAIR="" # Local path to aws private key
+INSTANCE_TYPE="" # Type of instance, e.g. "c4.large"
+AMZN_LINUX_AMI=""
+
+# Optional (defaults will work)
+INSTANCE_NAME=""
+FOLLOW_INSTALL_SCRIPT=true # If true, will ssh to instance and follow install progress in console
+PUBLIC=false # If true the instance can be accessed publicly
+SEC_GR_NAME="r-sg"
+################################################################################
+
+# Create secutiry group if it doesn't exist
+if aws ec2 describe-security-groups --group-names $SEC_GR_NAME > /dev/null 2>&1 ; then
+    # do nothing
+else
+    aws ec2 create-security-group --group-name $SEC_GR_NAME --description "R on EC2 Security Group"
+fi
+
+# Allow connections: SSH and ports 8787 and 3838 for RStudio and Shiny over TCP
+if ["$PUBLIC" = "true"] ; then
+    ips="0.0.0.0/0" # Make instance open to the internet
+else
+    ips=`dig +short myip.opendns.com @resolver1.opendns.com`/32 # current IP
+fi
+aws ec2 authorize-security-group-ingress --group-name $SEC_GR_NAME --protocol tcp --port 22 --cidr $ips
+aws ec2 authorize-security-group-ingress --group-name $SEC_GR_NAME --protocol tcp --port 8787 --cidr $ips
+aws ec2 authorize-security-group-ingress --group-name $SEC_GR_NAME --protocol tcp --port 3838 --cidr $ips
+
+
+# Start instance and run setup script
+aws ec2 run-instances \
+  --image-id $AMZN_LINUX_AMI \
+  --count 1 \
+  --instance-type $INSTANCE_TYPE \
+  --key-name $KEYPAIR_NAME \
+  --security-groups $SEC_GR_NAME \
+  --user-data file://setup_instance_remote \
+  --instance-initiated-shutdown-behavior stop \
+   > instance.json
+
+# Save instance ID
+IID=$(jq -r '.Instances[0].InstanceId' "instance.json")
+
+# Name the instance
+if [[ ! -z $INSTANCE_NAME ]]; then
+    aws ec2 create-tags --resources $IID --tags Key=Name,Value=$INSTANCE_NAME
+fi
+
+# Wait for instance to launch
+sleep 60
+
+# Fetch the public DNS address
+PDNS=$(aws ec2 describe-instances --instance-ids "$IID" | jq -r '.Reservations[0].Instances[0].PublicDnsName')
+
+echo "Launched instance $IID with DNS: $PDNS"
+
+if ["$FOLLOW_INSTALL_SCRIPT" = "true"] ; then
+    ssh -i $KEYPAIR -t ec2-user@$PDNS "less +F /var/log/cloud-init-output.log"
+fi

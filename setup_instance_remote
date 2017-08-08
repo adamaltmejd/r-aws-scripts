@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# This bash code will be ran as EC2 instance is initialized.
+
+# OPTIONS
+
+# R source url
+r_url="https://cran.r-project.org/src/base/R-3/R-3.4.1.tar.gz"
+# Rstudio Server source url
+rstudio_server_url="https://download2.rstudio.org/rstudio-server-rhel-1.0.136-x86_64.rpm"
+
+# list of all packages to be installed
+packages="c('doMC', 'caret', 'data.table', 'plyr', 'dplyr', 'reshape', 'ggplot2')"
+# CRAN repository
+repos="https://cran.rstudio.com/"
+# password needed to log in to rstudio
+rstudiopassword="6kYMumDQ97fvRdbhp2eyAncMifDgWLwxZR"
+
+# Amazon SSM URL (needed to run commands through AWS-CLI)
+ssm_url="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm"
+
+
+################################################################################
+# Since user-data scripts are run as root we do not use sudo
+yum update -y
+
+# Install SSM
+cd /tmp
+yum install -y $ssm_url
+
+# yum R is outdated, instead installing R from source
+cd /tmp
+yum install -y gcc-c++ gcc-gfortran readline-devel libxml2-devel libcurl-devel bzip2-devel pcre-devel
+wget $r_url
+tar xfz "$(basename "$r_url")"
+cd $(basename "$r_url" .tar.gz)
+./configure --with-x=no --enable-R-shlib=yes --enable-java=no
+make
+make install
+
+# Installing R studio server from Source
+cd /tmp
+wget $rstudio_server_url
+yum install -y --nogpgcheck "$(basename "$rstudio_server_url")"
+
+# Install all required R packages
+R -q -e "install.packages($packages, repos='$repos')"
+
+# Rstudio login over http (port 8787)
+useradd rstudio
+echo "rstudio:$rstudiopassword" | chpasswd
+
+# Shutdown the instance when installation is finished
+shutdown -h now
